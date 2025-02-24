@@ -4,6 +4,11 @@
 #include <unistd.h> //Para la funcion Accept y Close
 #include <stdio.h>
 #include <stdlib.h> //Libreria para la funcion Error
+#include <string.h> //Libreria para la funcion strlen
+
+#define PORT 8080
+
+#define BUFFER_SIZE 256
 
 int initServerSocket(){
      // Creacion del socket
@@ -20,7 +25,7 @@ int initServerSocket(){
     // Configura la direccion del servidor   
     struct sockaddr_in server_addr;
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(8080);
+    server_addr.sin_port = htons(PORT);
     server_addr.sin_addr.s_addr = INADDR_ANY;
 
     // Relaciona el socket con la direccion
@@ -40,18 +45,38 @@ int initServerSocket(){
     return socket_fd;
 }
 
+void HandleResponse(int code, int ClientSocket){
+  char * response;
+  if(code == 210){
+      response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nhello\n";
+  } else if (code == 212){ "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n";
+  }else {
+      response = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n\r\n404 Not Found";
+  }
+
+  write(ClientSocket, response, strlen(response));
+  close(ClientSocket);
+}
+
 void HandleClient(int ServerSocket, int ClientSocket){
-      while(1){
-        //Obtener los datos recibidos del socket y los almacena en un buffer
-        unsigned char * buffer [256]; //Buffer que espera datos en binario
+    //Obtener los datos recibidos del socket y los almacena en un buffer
+    char buffer [BUFFER_SIZE];
         
-        int DatosBuffer = recv(ClientSocket, buffer, sizeof(buffer),0);  
+    int DatosDelBuffer = recv(ClientSocket, buffer, sizeof(buffer), 0);  
         
-        if(DatosBuffer < 0 ){
-          perror("Error leer el buffer!\n");
-          exit(EXIT_FAILURE);
-        }
-      } 
+    if(DatosDelBuffer < 0 ){
+      perror("Error leer el buffer!\n");
+      exit(EXIT_FAILURE);
+    } else {
+      printf("%s\n",buffer);
+      
+      //Verificamos si lo que hay en el buffer es un GET o un HEADERS
+      if(strncmp(buffer,"GET / ",6) == 0){
+        HandleResponse(210,ClientSocket);
+      } else if(strncmp(buffer,"GET /headers",12) == 0){
+        //HandleResponse(212,ClientSocket);
+      }
+    } 
 }
   
 int main() {
