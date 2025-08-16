@@ -1,123 +1,140 @@
+/*HEADERS*/
 #include <stdio.h>
 #include <sys/socket.h> // socket
+#include <sys/types.h> //ssize_t
 #include <netinet/in.h> // sockaddr_in
 #include <arpa/inet.h> // htons
 #include <unistd.h> // Accept , Close
 #include <stdlib.h> // perror
-#include <string.h> // strlen , strncmp
+#include <string.h> //strstr, strcmp
+#include <errno.h>
 
 #define PORT 8080 //int
+#define BUFFER_SIZE 1000000 //Bytes = 1MB
 
-#define BUFFER_SIZE 256 //int 
-
-int initServerSocket(){
-     // Creacion del socket
-    // AF_INET = IPv4
-    // SOCK_STREAM = TCP
-    // 0 = Protocolo por default 
-    int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
-    
-    if(socket_fd < 0){
-      perror("Error al crear el socket!\n");
+int init_server_socket(){
+   int server_socket; //Server File Descriptor
+   struct sockaddr_in server_addr;
+     
+    //AF_INET = IPv4     SOCK_STREAM = TCP     0 = Default Protocol
+     
+    // Socket creation
+    if((server_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0){
+      perror("SOCKET ERROR!\n");
       exit(EXIT_FAILURE);
     }
 
-    // Configura la direccion del servidor   
-    struct sockaddr_in server_addr;
+   // Avoid 'Address Already in use' Error
+    int reuse = 1;
+    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
+     printf("SO_REUSEADDR FAILED! %s\n",strerror(errno));
+     return 1;
+    }
+
+    // Server configuration   
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(PORT);
     server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(PORT);
 
-    // Relaciona el socket con la direccion
-    if(bind(socket_fd,(struct sockaddr *) &server_addr, sizeof(server_addr)) < 0 ){
-      perror("Error al relacionar el socket! ");
+    // Bind socket to the server's address and port
+    if(bind(server_socket,(struct sockaddr *) &server_addr, sizeof(server_addr)) < 0 ){
+      perror("BIND ERROR!");
       exit(EXIT_FAILURE);
     }
     
-    //Escucha las conexiones entrantes
-    int backlog = 3; //Numero de conexiones autorizadas
+    //Listen for incoming connections
+    int connections = 10; //Max connections
   
-    if(listen(socket_fd, backlog) < 0 ){
-      perror("Error al escuchar! ");
+    if(listen(server_socket, connections) < 0 ){
+      perror("LISTEN ERROR! ");
       exit(EXIT_FAILURE);
     }     
-    printf("Escuchando en el puerto '%d'...\n",PORT); 
-    return socket_fd;
+    printf("Listening on port '%d'...\n",PORT);
+    return server_socket;
 }
 
-void HandleHeaders(int ClientSocket, char *request){
 
-  char response[BUFFER_SIZE];
+char * handle_response( char * method, char * path, char * protocol){
+  char * response;
   
-  char *header_start = strstr(request,"\r\n");
-
-  if (header_start == NULL){
-    //Manejo en cazo que no se encuentre el inicio de los encabezados
-    perror("\nError al buscar los encabezados!");
-    return; 
+  //strcmp to verify the method
+ if (strcmp(method,"GET") == 0 && strcmp(path,"/") == 0){
+      response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nhello\n";
+ } else {
+      response = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n\r\n404 Not Found";
   }
 
-  header_start += 2;
-  //"\r" y "\n" cuentan como caracteres, sumamos +2 para avanzar dos caracteres y comenzar en la primera
-  // linea de los encabezados
+  return response;
+}
 
-  char *header_end = strstr(header_start,"\r\n\r\n");
 
-  if(header_end == NULL){
-    perror("\nError al buscar el final de los encabezados!");
-    return;
+int http_parser(int client_socket, char * request) {
+  char buffer[BUFFER_SIZE];
+
+  //Copy the request to the buffer
+  strlcpy(buffer,request, sizeof(buffer));
+
+  //METHOD
+  char * method = strtok(buffer, " ");
+  if(method == NULL){
+   printf("Invalid Request Method!\n"); 
+   return 0;
   }
-}
 
-void HandleResponse(int ClientSocket, char *request){
-  char *response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nHOLA";
-  write(ClientSocket, response, strlen(response));
-}
+  //PATH
+  char * path = strtok(NULL, " ");
+  if (path == NULL){
+    printf("Invalid Request Path\n");
+    return 0;
+  }
 
-void HandleRequest(int ServerSocket, int ClientSocket){
-    //Obtener los datos recibidos del socket y los almacena en un buffer
-    char request [BUFFER_SIZE]; //Buffer
-    
-    int DatosDelBuffer = recv(ClientSocket, request, sizeof(request), 0);
+  //PROTOCOL
+  char * protocol = strtok(NULL,"\r\n");
+  if(protocol == NULL){
+    printf("Invalid Request Protocol\n");
+    return 0;
+  }
 
-    //Verificamos el contenido del buffer
-    if(DatosDelBuffer < 0 ){
-      perror("Error leer el buffer!\n");
-      exit(EXIT_FAILURE);
-    } 
-    
-    request[DatosDelBuffer] = '\0'; //Nos aseguramos que al final de los datos del buffer haya un NULL
-    
-    HandleHeaders(ClientSocket,request); //Llamamos al metodo que maneja los encabezados antes de mandar una respuesta
+  const char * response = handle_response(method, path, protocol);
 
-    if(strncmp(request,"GET / ",6) == 0){
-//      printf("%s\n",request); 
-      HandleResponse(ClientSocket,request);
-    } else {
-      char *response = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n\r\n404 Not Found";
-      write(ClientSocket, response, strlen(response)); 
-    }    
-    
-    //Cierra el Socket y termina la conexion
-    close(ClientSocket);
-}
+  send(client_socket, response, strlen(response), 0);
+  return 1;
+} 
+
+void handle_client(int client_socket){
+  char buffer [BUFFER_SIZE]; //buffer for client request
+
+  //Writes the request in the buffer and counts the bytes with ssize_t
+  ssize_t bytes_received = recv(client_socket, buffer, sizeof(buffer) -1, 0);
   
+  buffer[bytes_received] = '\0'; //NULL Terminate the request
+
+  printf("Request:\n %s \n", buffer);
+  
+  if(bytes_received > 0){
+    http_parser(client_socket, buffer);
+  } 
+  close(client_socket);
+}
+
 int main() {
-    int ServerSocket = initServerSocket();
-   
-    // Control de las conexiones de los clientes
-    while(1){
-      //Informacion del cliente
-      struct sockaddr_in client_addr;
-      socklen_t client_len = sizeof(client_addr); //Size of address buffer
-      int ClientSocket = accept(ServerSocket, (struct sockaddr *)&client_addr, &client_len); 
-      
-      // Acepta la conexion de los clientes
-      if(ClientSocket < 0){
-        perror("Error al acceptar al cliente!\n");
-        exit(EXIT_FAILURE);
-      }
-      HandleRequest(ServerSocket,ClientSocket);
+  int server_socket = init_server_socket();
+ 
+  // Cient connections control
+  while(1){
+    //Client info
+    struct sockaddr_in client_addr; //IP address and port of the client
+    socklen_t client_addr_len = sizeof(client_addr); //Size of address buffer
+    int client_socket;
+    
+    if ((client_socket = accept(server_socket,
+                                 (struct sockaddr *)&client_addr,
+                                 &client_addr_len)) < 0){
+      perror("Failed to accept the client!\n");
+      continue;
     }
+    handle_client(client_socket);
+  }
+    close(server_socket);
     return 0;
 }
