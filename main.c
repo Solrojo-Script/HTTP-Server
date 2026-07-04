@@ -12,8 +12,9 @@
 #define PORT 8080 //int
 #define BUFFER_SIZE 1000000 //Bytes = 1MB
 
+//Config of the server conection
 int init_server_socket(){
-   int server_socket; //Server File Descriptor
+   int server_socket = 1; //Server File Descriptor
    struct sockaddr_in server_addr;
      
     //AF_INET = IPv4     SOCK_STREAM = TCP     0 = Default Protocol
@@ -25,15 +26,18 @@ int init_server_socket(){
     }
 
    // Avoid 'Address Already in use' Error
-    int reuse = 1;
+    int reuse;
+
+    // Configure socket options. SO_REUSEADDR allows reusing a local address
+   // (e.g., after restarting the server while the port is in TIME_WAIT).
     if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
      printf("SO_REUSEADDR FAILED! %s\n",strerror(errno));
      return 1;
     }
 
     // Server configuration   
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_family = AF_INET; //IPv4
+    server_addr.sin_addr.s_addr = INADDR_ANY; //Listen on any interface (127.0.. , localhost, etc)
     server_addr.sin_port = htons(PORT);
 
     // Bind socket to the server's address and port
@@ -62,7 +66,7 @@ char * handle_response( char * method, char * path, char * protocol){
       response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nhello\n";
  } else {
       response = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n\r\n404 Not Found";
-  }
+ }
 
   return response;
 }
@@ -71,7 +75,7 @@ char * handle_response( char * method, char * path, char * protocol){
 int http_parser(int client_socket, char * request) {
   char buffer[BUFFER_SIZE];
 
-  //Copy the request to the buffer
+  //Copy the request to a buffer with strlcpy() cus strtok() modifies the original string
   strlcpy(buffer,request, sizeof(buffer));
 
   //METHOD
@@ -107,7 +111,12 @@ void handle_client(int client_socket){
   //Writes the request in the buffer and counts the bytes with ssize_t
   ssize_t bytes_received = recv(client_socket, buffer, sizeof(buffer) -1, 0);
   
-  buffer[bytes_received] = '\0'; //NULL Terminate the request
+  //To avoid undefined behavior if recv returns -1
+  if (bytes_received <= 0){
+    close(client_socket);
+  }
+
+  buffer[bytes_received] = '\0'; //Add a null terminator so the buffer can be treated as a C string.
 
   printf("Request:\n %s \n", buffer);
   
