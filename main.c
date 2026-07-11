@@ -7,6 +7,7 @@
 #include <unistd.h> // Accept , Close
 #include <stdlib.h> // perror
 #include <string.h> //strstr, strcmp
+#include <netinet/tcp.h> //Keep Alive TCP Options
 #include <errno.h>
 
 #define PORT 8080 //int
@@ -16,7 +17,8 @@
 int init_server_socket(){
    int server_socket = 1; //Server File Descriptor
    struct sockaddr_in server_addr;
-     
+   int opt = 1; //Activate option
+
     //AF_INET = IPv4     SOCK_STREAM = TCP     0 = Default Protocol
      
     // Socket creation
@@ -26,12 +28,10 @@ int init_server_socket(){
     }
 
    // Avoid 'Address Already in use' Error
-    int reuse;
-
-    // Configure socket options. SO_REUSEADDR allows reusing a local address
+   // Configure socket options. SO_REUSEADDR allows reusing a local address
    // (e.g., after restarting the server while the port is in TIME_WAIT).
-    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
-     printf("SO_REUSEADDR FAILED! %s\n",strerror(errno));
+    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+     perror("SO_REUSEADDR FAILED!");
      return 1;
     }
 
@@ -57,17 +57,64 @@ int init_server_socket(){
     return server_socket;
 }
 
+int init_client_socket (int cli_sock) { 
+    int keepalive_time; //Seconds
+    int opt = 1;
 
-char * handle_response( char * method, char * path, char * protocol){
-  char * response;
-  
+    // Enable TCP keepalive probes
+    if (setsockopt(cli_sock, SOL_SOCKET, SO_KEEPALIVE, &opt, sizeof(opt)) < 0) {
+      perror("Keep-Alive Configuration FAILED!");
+      return 1;
+    }
+    
+    keepalive_time = 60;
+    // Idle secs
+    if (setsockopt(cli_sock, IPPROTO_TCP, TCP_KEEPIDLE, &keepalive_time, sizeof(keepalive_time)) < 0) {
+      perror("Keep Alive Iddle Time FAILED!");
+      return -1;
+    }
+
+    keepalive_time = 10;
+    // Probe interval
+    if (setsockopt(cli_sock, IPPROTO_TCP, TCP_KEEPINTVL, &keepalive_time, sizeof(keepalive_time)) < 0){
+      perror ("Keep Alive Probe Interval FAILED!");
+      return -1;
+    }
+
+    keepalive_time = 3;
+    // Probe count
+    if (setsockopt(cli_sock, IPPROTO_TCP, TCP_KEEPCNT, &keepalive_time, sizeof(keepalive_time)) < 0){
+      perror ("Keep Alive Probe Count FAILED!");
+      return -1;
+    }
+    
+    return cli_sock;
+}
+
+char * handle_response( char * method, char * path){
+  char *status,*keep_alive,*content_type,*content;
   //strcmp to verify the method
- if (strcmp(method,"GET") == 0 && strcmp(path,"/") == 0){
-      response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nhello\n";
- } else {
-      response = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n\r\n404 Not Found";
- }
+ if (strcmp(method,"GET") == 0){
+    if (strcmp(path,"/") == 0){
+      status = "HTTP/1.1 200 OK";
+      keep_alive = "Connection: Keep-Alive";
+      content_type = "Content-Type: text/plain";
+      content = "HELADO";
+    } else {
+      status = "HTTP/1.1 404 Not Found";
+      content_type = "Content-Type: text/plain";
+      content = "404 Not Found";
+    }
+  } else {
+  // DO SOMETHING ELSE IF IS NOT THE GET METHOD
+  }
 
+  // Calculates the response size and allocates memory for the HTTP Header response.
+  ssize_t len = strlen(status) + strlen(keep_alive) + strlen(content_type) + strlen(content) + strlen("\r\n") + strlen("\r\n") + strlen("\r\n\r\n") + strlen("\n");
+  
+  char * response = malloc(len);
+  snprintf(response, len, "%s\r\n%s\r\n%s\r\n\r\n%s\n", status, keep_alive, content_type, content);
+  
   return response;
 }
 
@@ -99,7 +146,7 @@ int http_parser(int client_socket, char * request) {
     return 0;
   }
 
-  const char * response = handle_response(method, path, protocol);
+  const char * response = handle_response(method, path);
 
   send(client_socket, response, strlen(response), 0);
   return 1;
@@ -111,7 +158,7 @@ void handle_client(int client_socket){
   //Writes the request in the buffer and counts the bytes with ssize_t
   ssize_t bytes_received = recv(client_socket, buffer, sizeof(buffer) -1, 0);
   
-  //To avoid undefined behavior if recv returns -1
+  // Close the socket if no data was received or an error occurred.
   if (bytes_received <= 0){
     close(client_socket);
   }
@@ -123,7 +170,10 @@ void handle_client(int client_socket){
   if(bytes_received > 0){
     http_parser(client_socket, buffer);
   } 
-  close(client_socket);
+
+  //Commented out to keep the socket open to allow HTTP keep-alive connections.
+  //close(client_socket); 
+
 }
 
 int main() {
@@ -134,15 +184,21 @@ int main() {
     //Client info
     struct sockaddr_in client_addr; //IP address and port of the client
     socklen_t client_addr_len = sizeof(client_addr); //Size of address buffer
-    int client_socket;
+    int client_socket,cli_sock;
     
+    //Creates de Client Socket
     if ((client_socket = accept(server_socket,
                                  (struct sockaddr *)&client_addr,
                                  &client_addr_len)) < 0){
       perror("Failed to accept the client!\n");
       continue;
     }
-    handle_client(client_socket);
+
+    // Client Socket Configuration
+    cli_sock = init_client_socket(client_socket);
+
+    //Handles the Client's Request
+    handle_client(cli_sock);
   }
     close(server_socket);
     return 0;
