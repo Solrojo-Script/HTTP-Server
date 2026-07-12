@@ -1,1 +1,1 @@
-This is my first simple HTTP Server from scratch made with C.
+My first HTTP server written from scratch in C, created to learn how web servers work internally through TCP socket programming and HTTP protocol implementation.
